@@ -1,5 +1,6 @@
 import torch.nn as nn
-from blocks import *
+
+from blocks import DoubleConv, DownsampleBlockMax, UpsampleBlock
 
 
 class FeatureNet(nn.Module):
