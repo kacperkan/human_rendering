@@ -20,7 +20,9 @@ class FeatureNet(nn.Module):
         self.up2 = UpsampleBlock(512, 256 // factor, bilinear)
         self.up3 = UpsampleBlock(256, 128 // factor, bilinear)
         self.up4 = UpsampleBlock(128, 64, bilinear)
-        self.outc = DoubleConv(64, n_classes)
+        self.outc = nn.Sequential(
+            DoubleConv(64, 64), nn.Conv2d(64, n_classes, 3, 1, 1, bias=True)
+        )
 
     def forward(self, x):
         x1 = self.inc(x)

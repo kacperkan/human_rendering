@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class DoubleConv(nn.Module):
@@ -12,14 +11,14 @@ class DoubleConv(nn.Module):
             mid_channels = out_channels
         layers = [
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(mid_channels),
-            nn.ReLU(inplace=True),
+            nn.InstanceNorm2d(mid_channels),
+            nn.LeakyReLU(0.2),
             nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1),
         ]
         if not final:
             layers += [
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(inplace=True),
+                nn.InstanceNorm2d(out_channels),
+                nn.LeakyReLU(0.2),
             ]
         self.double_conv = nn.Sequential(*layers)
 
@@ -31,7 +30,7 @@ class DownsampleBlockMax(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(2), DoubleConv(in_channels, out_channels)
+            nn.AvgPool2d(2), DoubleConv(in_channels, out_channels)
         )
 
     def forward(self, x):
@@ -49,8 +48,8 @@ class DownsampleBlockStride(nn.Module):
                 padding=1,
                 stride=2,
             ),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
+            nn.InstanceNorm2d(out_channels),
+            nn.LeakyReLU(0.2),
         )
 
     def forward(self, x):
@@ -77,13 +76,6 @@ class UpsampleBlock(nn.Module):
     def forward(self, x1, x2):
         x1 = self.up(x1)
         # input is CHW
-        diffY = x2.size()[2] - x1.size()[2]
-        diffX = x2.size()[3] - x1.size()[3]
-
-        x1 = F.pad(
-            x1,
-            [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2],
-        )
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
@@ -93,16 +85,8 @@ class UpsampleBlockRender(nn.Module):
         super().__init__()
 
         self.up = nn.Sequential(
-            nn.ConvTranspose2d(
-                in_channels,
-                out_channels,
-                kernel_size=3,
-                stride=2,
-                output_padding=1,
-                padding=1,
-            ),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
+            DoubleConv(in_channels, out_channels, in_channels // 2),
         )
 
     def forward(self, x):
@@ -115,14 +99,14 @@ class ResidualBlock(nn.Module):
 
         self.conv_block1 = nn.Sequential(
             nn.Conv2d(channel_num, channel_num, 3, padding=1),
-            nn.BatchNorm2d(channel_num),
-            nn.ReLU(),
+            nn.InstanceNorm2d(channel_num),
+            nn.LeakyReLU(0.2),
         )
         self.conv_block2 = nn.Sequential(
             nn.Conv2d(channel_num, channel_num, 3, padding=1),
-            nn.BatchNorm2d(channel_num),
+            nn.InstanceNorm2d(channel_num),
         )
-        self.relu = nn.ReLU()
+        self.relu = nn.LeakyReLU(0.2)
 
     def forward(self, x):
         residual = x
