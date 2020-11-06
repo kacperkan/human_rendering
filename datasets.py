@@ -11,13 +11,7 @@ class VideoDataset(Dataset):
         self.image_dir = image_dir
         self.texture_images = os.listdir(os.path.join(f"{image_dir}"))
         self.transform = transforms.Compose(
-            [
-                transforms.Resize(128),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)
-                ),
-            ]
+            [transforms.Resize(128), transforms.ToTensor()]
         )
 
     def __len__(self):

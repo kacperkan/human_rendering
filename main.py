@@ -136,7 +136,7 @@ class HumanRendering(pl.LightningModule):
     def configure_optimizers(self):
         lr = 0.0002
         b1 = 0.5
-        b2 = 0
+        b2 = 0.99
 
         opt_gen = torch.optim.Adam(
             list(self.feature_net.parameters())
