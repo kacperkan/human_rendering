@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
+import torch.nn.functional
 
 
 class SaveOutput:
@@ -15,44 +16,38 @@ class SaveOutput:
 
 
 def l1_distance(tensor, tensor_sub):
-    diff_tensor = torch.abs(tensor - tensor_sub)
-    return torch.sum(diff_tensor)
+    return nn.functional.l1_loss(tensor_sub, tensor)
 
 
-def perceptual_loss(ground_truth_activations, generated_activations):
-    loss = 0
-    for ground_truth_activation, generated_activation in zip(
-        ground_truth_activations, generated_activations
-    ):
-        num_elements = 1
-        for dim in ground_truth_activation.size()[1:]:
-            num_elements *= dim
-        loss += (
-            l1_distance(ground_truth_activation, generated_activation)
-            / num_elements
-        )
-    return loss
+class VGGLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.criterion = nn.L1Loss()
+        self.weights = [1.0 / 32, 1.0 / 16, 1.0 / 8, 1.0 / 4, 1.0]
+
+    def forward(self, x, y, vgg):
+        x_vgg, y_vgg = vgg(x), vgg(y)
+        loss = 0
+        for i in range(len(x_vgg)):
+            loss += self.weights[i] * self.criterion(
+                x_vgg[i], y_vgg[i].detach()
+            )
+        return loss
 
 
 def adversarial_loss(models, real_image, fake_image, is_discriminator):
-    loss_function = nn.BCELoss()
+    loss_function = nn.MSELoss()
     loss = 0
-    activation = nn.Sigmoid()
+    pool = nn.AvgPool2d(3, 2, 1, count_include_pad=False)
     for idx, model in enumerate(models):
+        disc_real_out = None
         if is_discriminator:
-            real_image_down = F.interpolate(
-                real_image, scale_factor=1 / (2 ** idx), mode="bilinear"
-            )
-            disc_real_out = activation(model(real_image_down))
-        fake_image_down = F.interpolate(
-            fake_image, scale_factor=1 / (2 ** idx), mode="bilinear"
-        )
-        disc_fake_out = activation(model(fake_image_down))
+            real_image_down = pool(real_image)
+            disc_real_out = model(real_image_down)
+        fake_image_down = pool(fake_image)
+        disc_fake_out = model(fake_image_down)
         if is_discriminator:
-            if idx == 0:
-                print("\n")
-                print(torch.mean(disc_real_out[0]))
-                print(torch.mean(disc_fake_out[0]))
+            assert disc_real_out is not None
             real_loss = loss_function(
                 disc_real_out, torch.ones_like(disc_real_out)
             )
@@ -69,10 +64,14 @@ def adversarial_loss(models, real_image, fake_image, is_discriminator):
 
 
 def inpainting_loss(features, input_texture, target_texture):
-    dist_in_gen = l1_distance(
-        input_texture[:, :3, :, :], features[:, :3, :, :]
+    loss = nn.L1Loss()
+
+    dist_in_gen = loss(
+        features[:, :3, :, :],
+        input_texture[:, :3, :, :],
     )
-    dist_tar_gen = l1_distance(
-        target_texture[:, :3, :, :], features[:, :3, :, :]
+    dist_tar_gen = loss(
+        features[:, :3, :, :],
+        target_texture[:, :3, :, :],
     )
-    return dist_in_gen + dist_tar_gen
+    return (dist_in_gen + dist_tar_gen) * 0.5
