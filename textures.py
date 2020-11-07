@@ -89,10 +89,13 @@ class MapDensePoseTex:
 class MapDensePoseTexModule(nn.Module):
     def __init__(self, tex_res: int) -> None:
         super().__init__()
-        self.register_buffer(
-            "lut",
-            torch.from_numpy(np.load(UV_LOOKUP_TABLE.as_posix())).float(),
-        )
+
+        lut_table = torch.from_numpy(
+            np.load(UV_LOOKUP_TABLE.as_posix())
+        ).float()
+        _, h, w, _ = lut_table.shape
+        lut_table = torch.cat((torch.zeros((1, h, w, 2)), lut_table), dim=0)
+        self.register_buffer("lut", lut_table)
         self.tex_res = tex_res
 
     def forward(
@@ -116,42 +119,32 @@ class MapDensePoseTexModule(nn.Module):
             torch.Tensor: Tensor with mapped pixels from the texture space
                 into image space. Dimensions: B x C x H' x W'
         """
-        output_img = []
-        for tex, iuv_img in zip(tex_batch, iuv_img_batch):
-            iuv_raw = (
-                iuv_img.masked_select((iuv_img[0] > 0).unsqueeze(dim=0))
-                .view((3, -1))
-                .t()
-            )
+        i, u, v = iuv_img_batch.transpose(1, 0)
+        u = (u.float() / 255.0).clamp(0, 1)
+        v = (v.float() / 255.0).clamp(0, 1)
 
-            i = iuv_raw[:, 0] - 1
-            u = iuv_raw[:, 1].float() / 255.0
-            v = iuv_raw[:, 2].float() / 255.0
+        height, width = iuv_img_batch.shape[2:]
 
-            u = u.clamp(0.0, 1.0)
-            v = v.clamp(0.0, 1.0)
+        uv_smpl = self.lut[
+            i.long(),
+            torch.round(v * 255.0).long(),
+            torch.round(u * 255.0).long(),
+        ]
+        u_I = uv_smpl[..., 0] * 2 - 1
+        v_I = (1 - uv_smpl[..., 1]) * 2 - 1
+        coordinates = torch.stack((u_I, v_I), dim=1)
 
-            uv_smpl = self.lut[
-                i.long(),
-                torch.round(v * 255.0).long(),
-                torch.round(u * 255.0).long(),
-            ]
+        grid = nn.functional.interpolate(
+            coordinates,
+            size=(height, width),
+            mode="bilinear",
+            align_corners=True,
+        )
+        output_data = nn.functional.grid_sample(
+            tex_batch,
+            grid.permute((0, 2, 3, 1)),
+            mode="bilinear",
+            align_corners=True,
+        )
 
-            u_I = torch.round(uv_smpl[:, 0] * (self.tex_res - 1)).long()
-            v_I = torch.round((1 - uv_smpl[:, 1]) * (self.tex_res - 1)).long()
-            output_data = (
-                torch.zeros(
-                    (tex.shape[0], iuv_img.shape[1], iuv_img.shape[2]),
-                    requires_grad=True,
-                )
-                .float()
-                .to(tex)
-            )
-            output_data = torch.masked_scatter(
-                output_data,
-                (iuv_img[[0]] > 0),
-                tex[:, v_I, u_I],
-            )
-            output_img.append(output_data)
-
-        return torch.stack(output_img, dim=0)
+        return output_data
