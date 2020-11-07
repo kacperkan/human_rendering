@@ -63,7 +63,11 @@ def adversarial_loss(models, real_image, fake_image, is_discriminator):
     return loss / len(models)
 
 
-def inpainting_loss(features, input_texture, target_texture):
+def inpainting_loss(
+    features: torch.Tensor,
+    input_texture: torch.Tensor,
+    target_texture: torch.Tensor,
+) -> torch.Tensor:
     loss = nn.L1Loss()
 
     dist_in_gen = loss(
@@ -74,4 +78,4 @@ def inpainting_loss(features, input_texture, target_texture):
         features[:, :3, :, :],
         target_texture[:, :3, :, :],
     )
-    return (dist_in_gen + dist_tar_gen) * 0.5
+    return dist_in_gen + dist_tar_gen

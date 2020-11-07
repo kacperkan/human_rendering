@@ -246,3 +246,7 @@ dmypy.json
 /fig.jpg
 /image.png
 /models
+/val_fig.jpg
+/render.png
+/val_image.png
+/val_render.png

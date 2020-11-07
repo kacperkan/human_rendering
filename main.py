@@ -26,9 +26,9 @@ class HumanRendering(pl.LightningModule):
         self.render_net = RenderNet(16, 3)
         self.discriminators = nn.ModuleList(
             [
-                PatchDiscriminator(3),
-                PatchDiscriminator(3),
-                PatchDiscriminator(3),
+                PatchDiscriminator(6),
+                PatchDiscriminator(6),
+                PatchDiscriminator(6),
             ]
         )
         self.mapper = MapDensePoseTexModule(tex_res)
@@ -38,8 +38,12 @@ class HumanRendering(pl.LightningModule):
 
         self.disc_total_loss = 0
         self.gen_total_loss = 0
+
         self.gen_losses = []
         self.disc_losses = []
+
+        self.val_gen_losses = []
+        self.val_disc_losses = []
 
     def forward(
         self, input_texture: torch.Tensor, target_iuv: torch.Tensor
@@ -55,21 +59,30 @@ class HumanRendering(pl.LightningModule):
         feature_out, textured_target, render_out = self(
             texture, train_batch["iuv"]
         )
-        save_image(feature_out[[0]], "image.png")
+        save_image(textured_target[[0], :3], "image.png")
+        save_image(render_out, "render.png")
 
         # train generator
         if optimizer_idx == 0:
             loss_inpainting = inpainting_loss(
-                feature_out, input_batch, target_batch
+                feature_out,
+                train_batch["texture"],
+                train_batch["target_texture"],
             )
             loss_adversarial = adversarial_loss(
                 self.discriminators,
-                target_batch,
-                render_out,
+                torch.cat(
+                    (
+                        train_batch["target_texture"][:, :3],
+                        train_batch["target_frame"],
+                    ),
+                    dim=1,
+                ),
+                torch.cat((textured_target[:, :3], render_out), dim=1),
                 is_discriminator=False,
             )
             loss_perceptual = self.vgg_loss(
-                render_out, target_batch, self.vgg19
+                render_out, train_batch["target_frame"], self.vgg19
             )
             total_loss = loss_inpainting + loss_adversarial + loss_perceptual
             # print(f'\nGen loss: {total_loss}')
@@ -80,8 +93,14 @@ class HumanRendering(pl.LightningModule):
         if optimizer_idx == 1:
             loss_adversarial = adversarial_loss(
                 self.discriminators,
-                target_batch,
-                render_out,
+                torch.cat(
+                    (
+                        train_batch["target_texture"][:, :3],
+                        train_batch["target_frame"],
+                    ),
+                    dim=1,
+                ),
+                torch.cat((textured_target[:, :3], render_out), dim=1),
                 is_discriminator=True,
             )
             # print(
@@ -104,9 +123,65 @@ class HumanRendering(pl.LightningModule):
         feature_out, textured_target, render_out = self(
             texture, valid_batch["iuv"]
         )
-        import ipdb
+        save_image(textured_target[[0], :3], "val_image.png")
+        save_image(render_out, "val_render.png")
 
-        ipdb.set_trace()
+        # train generator
+        loss_inpainting = inpainting_loss(
+            feature_out,
+            valid_batch["texture"],
+            valid_batch["target_texture"],
+        )
+        loss_adversarial_generator = adversarial_loss(
+            self.discriminators,
+            torch.cat(
+                (
+                    valid_batch["target_texture"][:, :3],
+                    valid_batch["target_frame"],
+                ),
+                dim=1,
+            ),
+            torch.cat((textured_target[:, :3], render_out), dim=1),
+            is_discriminator=False,
+        )
+        loss_perceptual = self.vgg_loss(
+            render_out, valid_batch["target_frame"], self.vgg19
+        )
+        total_generator_loss = (
+            loss_inpainting + loss_adversarial_generator + loss_perceptual
+        )
+        # print(f'\nGen loss: {total_loss}')
+
+        # train discriminator
+        loss_adversarial_discriminator = adversarial_loss(
+            self.discriminators,
+            torch.cat(
+                (
+                    valid_batch["target_texture"][:, :3],
+                    valid_batch["target_frame"],
+                ),
+                dim=1,
+            ),
+            torch.cat((textured_target[:, :3], render_out), dim=1),
+            is_discriminator=True,
+        )
+        total_discriminator_loss = loss_adversarial_discriminator
+        # print(
+        #     f"\nDisc loss: {self.disc_total_loss}, {self.gen_total_loss}"
+        # )
+        self.val_gen_losses.append(total_generator_loss)
+        self.val_disc_losses.append(total_discriminator_loss)
+        plt.figure()
+        plt.plot(self.gen_losses, label="generator", color="orange")
+        plt.plot(self.disc_losses, label="discriminator", color="blue")
+        plt.legend()
+        plt.savefig("val_fig.jpg")
+        plt.close()
+
+        return {
+            "discriminator": total_discriminator_loss,
+            "generator": total_generator_loss,
+        }
 
     def configure_optimizers(self):
         lr = 0.0002
@@ -140,7 +215,7 @@ def train(train_path: str, valid_path: str):
         train_path,
         valid_path,
         batch_size=train_config["batch_size"],
-        num_workers=0,
+        num_workers=mp.cpu_count() - 1,
         texture_transforms=tv_transforms.Compose([tv_transforms.ToTensor()]),
         iuv_transforms=None,
     )
@@ -149,7 +224,7 @@ def train(train_path: str, valid_path: str):
         gpus=1,
         max_epochs=train_config["max_epochs"],
         default_root_dir=Path("models") / "humanrendering",
-        num_sanity_val_steps=0,
+        num_sanity_val_steps=2,
     )
     trainer.fit(model, datamodule=data_module)
 

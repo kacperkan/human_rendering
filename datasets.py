@@ -1,6 +1,8 @@
 import os
+from operator import itemgetter
 from pathlib import Path
 from typing import Any, Optional
+import random
 
 import h5py
 import numpy as np
@@ -37,16 +39,18 @@ class VideoDataset(Dataset):
 
 
 class DeepFashionDataset(Dataset):
-    def __init__(
-        self,
-        file_path: str,
-    ) -> None:
+    def __init__(self, file_path: str, seed: int = 0xCAFFE) -> None:
         self.file_paths = (
             seq(Path(file_path).read_text().split("\n"))
             .filter(lambda x: len(x) > 0)
             .sorted()
+            .map(Path)
+            .filter(Path.exists)
             .list()
         )
+        self.seed = seed
+        self._rng = np.random.RandomState(seed)
+        self._rng_py = random.Random(seed)
 
     def __len__(self) -> int:
         return len(self.file_paths)
@@ -59,8 +63,25 @@ class DeepFashionDataset(Dataset):
             uv = (h5_file["uv"][:] * 255).astype(np.uint8)
             instances = h5_file["i"][:]
 
+        with h5py.File(
+            self._sample_with_similar_id(self.file_paths[index]), mode="r"
+        ) as h5_file:
+            target_frame = h5_file["frame"][:]
+            target_texture = h5_file["texture"][:]
+
         frame = torch.from_numpy(frame).float().div(255).permute((2, 0, 1))
         texture = torch.from_numpy(texture).float().div(255).permute((2, 0, 1))
+
+        target_frame = (
+            torch.from_numpy(target_frame).float().div(255).permute((2, 0, 1))
+        )
+        target_texture = (
+            torch.from_numpy(target_texture)
+            .float()
+            .div(255)
+            .permute((2, 0, 1))
+        )
+
         iuv = torch.from_numpy(
             np.concatenate((instances[..., None], uv), axis=-1)
         ).permute((2, 0, 1))
@@ -69,8 +90,30 @@ class DeepFashionDataset(Dataset):
             "sample_index": sample_index,
             "frame": frame,
             "texture": texture,
+            "target_texture": target_texture,
+            "target_frame": target_frame,
             "iuv": iuv,
         }
+
+    @staticmethod
+    def _extract_parent(path: Path) -> str:
+        parent = path.parent
+        while "id_" not in parent.name:
+            parent = parent.parent
+        return parent.name
+
+    def _sample_with_similar_id(self, current_path: Path) -> Path:
+        example_files = (
+            seq(self.file_paths)
+            .group_by(DeepFashionDataset._extract_parent)
+            .filter(
+                lambda x: x[0]
+                == DeepFashionDataset._extract_parent(current_path)
+            )
+            .flat_map(itemgetter(1))
+            .to_list()
+        )
+        return self._rng_py.choice(example_files)
 
 
 class DeepFashionDataModule(datamodule.LightningDataModule):
