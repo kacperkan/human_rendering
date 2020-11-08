@@ -1,22 +1,23 @@
 import multiprocessing as mp
 from pathlib import Path
-from typing import Tuple
+from typing import List, Tuple
 
 import click
 import matplotlib.pyplot as plt
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-from torchvision.utils import save_image
 import torchvision.transforms as tv_transforms
+from pytorch_lightning.loggers import TestTubeLogger
+from torchvision.utils import save_image
 
 from common import CONFIG
 from datasets import DeepFashionDataModule
 from feature_net import FeatureNet
 from losses import VGGLoss, adversarial_loss, inpainting_loss
 from render_net import PatchDiscriminator, RenderNet
-from vgg19 import Vgg19
 from textures import MapDensePoseTexModule
+from vgg19 import Vgg19
 
 
 class HumanRendering(pl.LightningModule):
@@ -39,11 +40,8 @@ class HumanRendering(pl.LightningModule):
         self.disc_total_loss = 0
         self.gen_total_loss = 0
 
-        self.gen_losses = []
-        self.disc_losses = []
-
-        self.val_gen_losses = []
-        self.val_disc_losses = []
+        self.gen_losses: List[float] = []
+        self.disc_losses: List[float] = []
 
     def forward(
         self, input_texture: torch.Tensor, target_iuv: torch.Tensor
@@ -175,15 +173,6 @@ class HumanRendering(pl.LightningModule):
         # print(
         #     f"\nDisc loss: {self.disc_total_loss}, {self.gen_total_loss}"
         # )
-        self.val_gen_losses.append(total_generator_loss)
-        self.val_disc_losses.append(total_discriminator_loss)
-        plt.figure()
-        plt.plot(self.gen_losses, label="generator", color="orange")
-        plt.plot(self.disc_losses, label="discriminator", color="blue")
-        plt.legend()
-        plt.savefig("val_fig.jpg")
-        plt.close()
-
         return {
             "discriminator": total_discriminator_loss,
             "generator": total_generator_loss,
@@ -226,10 +215,12 @@ def train(train_path: str, valid_path: str):
         iuv_transforms=None,
     )
 
+    model_path = Path("models") / "humanrendering"
     trainer = pl.Trainer(
+        logger=TestTubeLogger(save_dir=model_path.as_posix(), version=0),
         gpus=1,
         max_epochs=train_config["max_epochs"],
-        default_root_dir=Path("models") / "humanrendering",
+        default_root_dir=model_path,
         num_sanity_val_steps=2,
     )
     trainer.fit(model, datamodule=data_module)
