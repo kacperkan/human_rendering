@@ -48,9 +48,24 @@ class DeepFashionDataset(Dataset):
             .filter(Path.exists)
             .list()
         )
+        self._validate_paths()
         self.seed = seed
         self._rng = np.random.RandomState(seed)
         self._rng_py = random.Random(seed)
+
+    def _validate_paths(self):
+        print("Num samples before filtering: {}".format(len(self.file_paths)))
+
+        def _f(path: Path) -> bool:
+            try:
+                with h5py.File(path, mode="r") as _:
+                    pass
+                return True
+            except OSError:
+                return False
+
+        self.file_paths = seq(self.file_paths).filter(_f).list()
+        print("Num samples after filtering: {}".format(len(self.file_paths)))
 
     def __len__(self) -> int:
         return len(self.file_paths)
