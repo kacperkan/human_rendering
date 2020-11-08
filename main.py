@@ -73,7 +73,10 @@ class HumanRendering(pl.LightningModule):
                 self.discriminators,
                 torch.cat(
                     (
-                        train_batch["target_texture"][:, :3],
+                        self.mapper(
+                            train_batch["target_texture"][:, :3],
+                            train_batch["iuv"],
+                        ),
                         train_batch["target_frame"],
                     ),
                     dim=1,
@@ -95,7 +98,10 @@ class HumanRendering(pl.LightningModule):
                 self.discriminators,
                 torch.cat(
                     (
-                        train_batch["target_texture"][:, :3],
+                        self.mapper(
+                            train_batch["target_texture"][:, :3],
+                            train_batch["iuv"],
+                        ),
                         train_batch["target_frame"],
                     ),
                     dim=1,

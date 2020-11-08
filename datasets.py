@@ -111,8 +111,11 @@ class DeepFashionDataset(Dataset):
                 == DeepFashionDataset._extract_parent(current_path)
             )
             .flat_map(itemgetter(1))
+            .filter(lambda x: x.as_posix() != current_path.as_posix())
             .to_list()
         )
+        if len(example_files) == 0:
+            return current_path
         return self._rng_py.choice(example_files)
 
 

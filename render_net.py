@@ -20,7 +20,9 @@ class RenderNet(nn.Module):
         self.down1 = DownsampleBlockStride(n_channels, n_channels * 2)
         self.down2 = DownsampleBlockStride(n_channels * 2, n_channels * 4)
         self.down3 = DownsampleBlockStride(n_channels * 4, n_channels * 8)
-        self.residual = ResidualBlock(n_channels * 8)
+        self.residual = nn.Sequential(
+            *[ResidualBlock(n_channels * 8) for _ in range(6)]
+        )
         self.up1 = UpsampleBlockRender(n_channels * 8, n_channels * 4)
         self.up2 = UpsampleBlockRender(n_channels * 4, n_channels * 2)
         self.up3 = UpsampleBlockRender(n_channels * 2, n_channels)
@@ -34,8 +36,7 @@ class RenderNet(nn.Module):
         x = self.down1(x)
         x = self.down2(x)
         x = self.down3(x)
-        for idx in range(6):
-            x = self.residual(x)
+        x = self.residual(x)
         x = self.up1(x)
         x = self.up2(x)
         x = self.up3(x)
