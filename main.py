@@ -1,7 +1,9 @@
 import multiprocessing as mp
+import shutil
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
+from functional import seq
 
 import click
 import numpy as np
@@ -66,16 +68,17 @@ class HumanRendering(pl.LightningModule):
         feature_out, textured_target, render_out = self(
             texture, train_batch["iuv"]
         )
-        self.train_logger.add_image(
-            "render",
-            torchvision.utils.make_grid(render_out),
-            global_step=self.global_step,
-        )
-        self.train_logger.add_image(
-            "textured_target",
-            torchvision.utils.make_grid(textured_target[:, :3]),
-            global_step=self.global_step,
-        )
+        if self.global_step % 100:
+            self.train_logger.add_image(
+                "render",
+                torchvision.utils.make_grid(render_out),
+                global_step=self.global_step,
+            )
+            self.train_logger.add_image(
+                "textured_target",
+                torchvision.utils.make_grid(textured_target[:, :3]),
+                global_step=self.global_step,
+            )
 
         # train generator
         if optimizer_idx == 0:
@@ -104,16 +107,17 @@ class HumanRendering(pl.LightningModule):
             )
             total_loss = loss_inpainting + loss_adversarial + loss_perceptual
 
-            self.train_logger.add_scalars(
-                "generator",
-                {
-                    "total": total_loss,
-                    "adversarial": loss_adversarial,
-                    "perceptual": loss_perceptual,
-                    "inpainting": loss_inpainting,
-                },
-                global_step=self.global_step,
-            )
+            for name, val in {
+                "total": total_loss,
+                "adversarial": loss_adversarial,
+                "perceptual": loss_perceptual,
+                "inpainting": loss_inpainting,
+            }.items():
+                self.train_logger.add_scalar(
+                    f"generator/{name}",
+                    val,
+                    global_step=self.global_step,
+                )
             return {"loss": total_loss}
 
         # train discriminator
@@ -133,13 +137,13 @@ class HumanRendering(pl.LightningModule):
                 torch.cat((textured_target[:, :3], render_out), dim=1),
                 is_discriminator=True,
             )
-            self.train_logger.add_scalars(
-                "discriminator",
-                {
-                    "adversarial": loss_adversarial,
-                },
-                global_step=self.global_step,
-            )
+
+            for name, val in {"adversarial": loss_adversarial}.items():
+                self.train_logger.add_scalar(
+                    f"discriminator/{name}",
+                    loss_adversarial,
+                    global_step=self.global_step,
+                )
             return {"loss": loss_adversarial}
 
     def validation_step(self, valid_batch, *args, **kwargs):
@@ -246,14 +250,27 @@ class HumanRendering(pl.LightningModule):
         return [opt_gen, opt_disc], []
 
 
+def find_last_checkpoint(path: Path) -> str:
+    return (
+        seq(path.rglob("*.ckpt"))
+        .sorted(key=lambda x: int(x.name.split(".")[0].split("=")[1]))
+        .last()
+        .as_posix()
+    )
+
+
 @click.command()
 @click.argument("train_path", type=str)
 @click.argument("valid_path", type=str)
-def train(train_path: str, valid_path: str):
+@click.option("--load_pretrained", default=False)
+def train(train_path: str, valid_path: str, load_pretrained: bool):
     model_path = Path("models") / "humanrendering"
-    if not model_path.exists():
-        model_path.mkdir(exist_ok=True, parents=True)
+    if model_path.exists() and not load_pretrained:
+        shutil.rmtree(model_path.as_posix())
+    model_path.mkdir(exist_ok=True, parents=True)
     model = HumanRendering(model_path.as_posix())
+    if load_pretrained:
+        model.load_from_checkpoint(find_last_checkpoint(model_path))
     train_config = CONFIG["training"]
 
     data_module = DeepFashionDataModule(

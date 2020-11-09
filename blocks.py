@@ -124,8 +124,4 @@ class ResidualBlock(nn.Module):
         )
 
     def forward(self, x):
-        residual = x
-        x = self.conv_block1(x)
-        x = self.conv_block2(x)
-        x = x + residual
-        return x
+        return self.layers(x) + x
