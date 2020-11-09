@@ -38,14 +38,14 @@ class DownsampleBlockMax(nn.Module):
 
 
 class DownsampleBlockStride(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3):
+    def __init__(self, in_channels, out_channels, kernel_size=3, padding=1):
         super().__init__()
         self.down_conv = nn.Sequential(
             nn.Conv2d(
                 in_channels,
                 out_channels,
                 kernel_size=kernel_size,
-                padding=1,
+                padding=padding,
                 stride=1,
             ),
             nn.InstanceNorm2d(out_channels),
@@ -87,15 +87,7 @@ class UpsampleBlockRender(nn.Module):
 
         self.up = nn.Sequential(
             nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
-            nn.Conv2d(
-                in_channels,
-                out_channels,
-                kernel_size=3,
-                padding=1,
-                stride=1,
-            ),
-            nn.InstanceNorm2d(out_channels),
-            nn.LeakyReLU(0.2),
+            DoubleConv(in_channels, out_channels),
         )
 
     def forward(self, x):

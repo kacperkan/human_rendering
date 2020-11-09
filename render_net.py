@@ -59,20 +59,18 @@ class PatchDiscriminator(nn.Module):
         self.down3 = DownsampleBlockStride(
             128, 256, kernel_size=4
         )  # (bs, 32, 32, 256)
-        self.zero_pad = nn.ZeroPad2d(1)
-        self.conv = nn.Conv2d(256, 512, kernel_size=4)
-        self.norm = nn.BatchNorm2d(512)
-        self.relu = nn.ReLU(inplace=True)
-        self.out = nn.Conv2d(512, 1, kernel_size=4)
+        self.out = nn.Sequential(
+            nn.Conv2d(256, 512, kernel_size=4, padding=1, bias=False),
+            nn.InstanceNorm2d(512),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(512, 1, kernel_size=4, padding=1, bias=True),
+            nn.Sigmoid(),
+            nn.AdaptiveAvgPool2d((1, 1)),
+        )
 
     def forward(self, x):
         x = self.down1(x)
         x = self.down2(x)
         x = self.down3(x)
-        x = self.zero_pad(x)
-        x = self.conv(x)
-        x = self.norm(x)
-        x = self.relu(x)
-        x = self.zero_pad(x)
         logits = self.out(x)
-        return logits
+        return logits.mean(dim=(2, 3))

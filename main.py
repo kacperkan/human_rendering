@@ -1,15 +1,17 @@
 import multiprocessing as mp
+from collections import defaultdict
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import click
-import matplotlib.pyplot as plt
+import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+import torchvision
 import torchvision.transforms as tv_transforms
 from pytorch_lightning.loggers import TestTubeLogger
-from torchvision.utils import save_image
+from torch.utils.tensorboard.writer import SummaryWriter
 
 from common import CONFIG
 from datasets import DeepFashionDataModule
@@ -20,8 +22,12 @@ from textures import MapDensePoseTexModule
 from vgg19 import Vgg19
 
 
+def copy2cpu(tensor: torch.Tensor) -> np.ndarray:
+    return tensor.detach().cpu().numpy()
+
+
 class HumanRendering(pl.LightningModule):
-    def __init__(self, tex_res: int = 256):
+    def __init__(self, logging_path: str, tex_res: int = 256):
         super().__init__()
         self.feature_net = FeatureNet(3, 16)
         self.render_net = RenderNet(16, 3)
@@ -43,7 +49,10 @@ class HumanRendering(pl.LightningModule):
         self.gen_losses: List[float] = []
         self.disc_losses: List[float] = []
 
-    def forward(
+        self.train_logger = SummaryWriter(Path(logging_path) / "train")
+        self.valid_logger = SummaryWriter(Path(logging_path) / "valid")
+
+    def forward(  # type: ignore
         self, input_texture: torch.Tensor, target_iuv: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         feature_out = self.feature_net(input_texture)
@@ -57,8 +66,16 @@ class HumanRendering(pl.LightningModule):
         feature_out, textured_target, render_out = self(
             texture, train_batch["iuv"]
         )
-        save_image(textured_target[[0], :3], "image.png")
-        save_image(render_out, "render.png")
+        self.train_logger.add_image(
+            "render",
+            torchvision.utils.make_grid(render_out),
+            global_step=self.global_step,
+        )
+        self.train_logger.add_image(
+            "textured_target",
+            torchvision.utils.make_grid(textured_target[:, :3]),
+            global_step=self.global_step,
+        )
 
         # train generator
         if optimizer_idx == 0:
@@ -86,9 +103,18 @@ class HumanRendering(pl.LightningModule):
                 render_out, train_batch["target_frame"], self.vgg19
             )
             total_loss = loss_inpainting + loss_adversarial + loss_perceptual
-            # print(f'\nGen loss: {total_loss}')
-            self.gen_total_loss = total_loss
-            return total_loss
+
+            self.train_logger.add_scalars(
+                "generator",
+                {
+                    "total": total_loss,
+                    "adversarial": loss_adversarial,
+                    "perceptual": loss_perceptual,
+                    "inpainting": loss_inpainting,
+                },
+                global_step=self.global_step,
+            )
+            return {"loss": total_loss}
 
         # train discriminator
         if optimizer_idx == 1:
@@ -107,28 +133,20 @@ class HumanRendering(pl.LightningModule):
                 torch.cat((textured_target[:, :3], render_out), dim=1),
                 is_discriminator=True,
             )
-            # print(
-            #     f"\nDisc loss: {self.disc_total_loss}, {self.gen_total_loss}"
-            # )
-            self.gen_losses.append(self.gen_total_loss)
-            self.disc_losses.append(self.disc_total_loss)
-            plt.figure()
-            plt.plot(self.gen_losses, label="generator", color="orange")
-            plt.plot(self.disc_losses, label="discriminator", color="blue")
-            plt.legend()
-            plt.savefig("fig.jpg")
-            plt.close()
-            self.disc_total_loss = 0
-            self.disc_total_loss += loss_adversarial
-            return loss_adversarial
+            self.train_logger.add_scalars(
+                "discriminator",
+                {
+                    "adversarial": loss_adversarial,
+                },
+                global_step=self.global_step,
+            )
+            return {"loss": loss_adversarial}
 
     def validation_step(self, valid_batch, *args, **kwargs):
         texture = valid_batch["texture"]
         feature_out, textured_target, render_out = self(
             texture, valid_batch["iuv"]
         )
-        save_image(textured_target[[0], :3], "val_image.png")
-        save_image(render_out, "val_render.png")
 
         # train generator
         loss_inpainting = inpainting_loss(
@@ -154,9 +172,6 @@ class HumanRendering(pl.LightningModule):
         total_generator_loss = (
             loss_inpainting + loss_adversarial_generator + loss_perceptual
         )
-        # print(f'\nGen loss: {total_loss}')
-
-        # train discriminator
         loss_adversarial_discriminator = adversarial_loss(
             self.discriminators,
             torch.cat(
@@ -170,13 +185,45 @@ class HumanRendering(pl.LightningModule):
             is_discriminator=True,
         )
         total_discriminator_loss = loss_adversarial_discriminator
-        # print(
-        #     f"\nDisc loss: {self.disc_total_loss}, {self.gen_total_loss}"
-        # )
         return {
-            "discriminator": total_discriminator_loss,
-            "generator": total_generator_loss,
+            "discriminator/total": total_discriminator_loss,
+            "generator/total": total_generator_loss,
+            "generator/inpainting": loss_inpainting,
+            "generator/perceptual": loss_perceptual,
+            "textured_target": textured_target[:, :3],
+            "renders": render_out,
         }
+
+    def validation_epoch_end(
+        self, outputs: List[Dict[str, torch.Tensor]]
+    ) -> None:
+        textured_target = outputs[-1]["textured_target"]
+        render_out = outputs[-1]["renders"]
+
+        aggregated: Dict[str, List[np.ndarray]] = defaultdict(list)
+        for output in outputs:
+            for key, item in output.items():
+                if key not in ["renders", "textured_target"]:
+                    aggregated[key].append(copy2cpu(item))
+
+        aggregated_dict = {
+            key: np.mean(item) for key, item in aggregated.items()
+        }
+        if self.valid_logger is not None:
+            for key, metric in aggregated_dict.items():
+                self.valid_logger.add_scalar(
+                    key, metric, global_step=self.global_step
+                )
+            self.valid_logger.add_image(
+                "render",
+                torchvision.utils.make_grid(render_out),
+                global_step=self.global_step,
+            )
+            self.valid_logger.add_image(
+                "textured_target",
+                torchvision.utils.make_grid(textured_target),
+                global_step=self.global_step,
+            )
 
     def configure_optimizers(self):
         lr = 0.0002
@@ -203,7 +250,10 @@ class HumanRendering(pl.LightningModule):
 @click.argument("train_path", type=str)
 @click.argument("valid_path", type=str)
 def train(train_path: str, valid_path: str):
-    model = HumanRendering()
+    model_path = Path("models") / "humanrendering"
+    if not model_path.exists():
+        model_path.mkdir(exist_ok=True, parents=True)
+    model = HumanRendering(model_path.as_posix())
     train_config = CONFIG["training"]
 
     data_module = DeepFashionDataModule(
@@ -215,7 +265,6 @@ def train(train_path: str, valid_path: str):
         iuv_transforms=None,
     )
 
-    model_path = Path("models") / "humanrendering"
     trainer = pl.Trainer(
         logger=TestTubeLogger(save_dir=model_path.as_posix(), version=0),
         gpus=1,
