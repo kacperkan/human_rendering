@@ -1,16 +1,21 @@
 import torch.nn as nn
 
-from blocks import DoubleConv, DownsampleBlockMax, UpsampleBlock
+from blocks import (
+    BiasInitialization,
+    DoubleConv,
+    DownsampleBlockMax,
+    UpsampleBlock,
+)
 
 
-class FeatureNet(nn.Module):
+class FeatureNet(nn.Module, BiasInitialization):
     def __init__(self, n_channels, n_classes, bilinear=True):
-        super(FeatureNet, self).__init__()
+        super().__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
         self.bilinear = bilinear
 
-        self.inc = DoubleConv(n_channels, 64)
+        self.inc = DoubleConv(n_channels, 64, with_initial_activation=False)
         self.down1 = DownsampleBlockMax(64, 128)
         self.down2 = DownsampleBlockMax(128, 256)
         self.down3 = DownsampleBlockMax(256, 512)
@@ -21,8 +26,12 @@ class FeatureNet(nn.Module):
         self.up3 = UpsampleBlock(256, 128 // factor, bilinear)
         self.up4 = UpsampleBlock(128, 64, bilinear)
         self.outc = nn.Sequential(
-            DoubleConv(64, 64), nn.Conv2d(64, n_classes, 3, 1, 1, bias=True)
+            DoubleConv(64, 64),
+            nn.InstanceNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, n_classes, 3, 1, 1, bias=True),
         )
+        self._init()
 
     def forward(self, x):
         x1 = self.inc(x)

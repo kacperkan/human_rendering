@@ -1,8 +1,8 @@
 import os
+import random
 from operator import itemgetter
 from pathlib import Path
 from typing import Any, Optional
-import random
 
 import h5py
 import numpy as np
@@ -84,16 +84,37 @@ class DeepFashionDataset(Dataset):
             target_frame = h5_file["frame"][:]
             target_texture = h5_file["texture"][:]
 
-        frame = torch.from_numpy(frame).float().div(255).permute((2, 0, 1))
-        texture = torch.from_numpy(texture).float().div(255).permute((2, 0, 1))
+        frame = (
+            torch.from_numpy(frame)
+            .float()
+            .div(255)
+            .mul(2)
+            .sub(1)
+            .permute((2, 0, 1))
+        )
+        texture = (
+            torch.from_numpy(texture)
+            .float()
+            .div(255)
+            .mul(2)
+            .sub(1)
+            .permute((2, 0, 1))
+        )
 
         target_frame = (
-            torch.from_numpy(target_frame).float().div(255).permute((2, 0, 1))
+            torch.from_numpy(target_frame)
+            .float()
+            .div(255)
+            .mul(2)
+            .sub(1)
+            .permute((2, 0, 1))
         )
         target_texture = (
             torch.from_numpy(target_texture)
             .float()
             .div(255)
+            .mul(2)
+            .sub(1)
             .permute((2, 0, 1))
         )
 
