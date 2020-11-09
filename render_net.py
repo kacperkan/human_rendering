@@ -91,4 +91,4 @@ class PatchDiscriminator(nn.Module, BiasInitialization):
         x = self.down3(x)
         x = self.down4(x)
         logits = self.out(x)
-        return logits.mean(dim=(2, 3))
+        return logits
