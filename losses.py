@@ -36,10 +36,10 @@ class VGGLoss(nn.Module):
 
 
 def adversarial_loss(models, real_image, fake_image, is_discriminator):
-    loss_function = nn.BCELoss()
+    loss_function = nn.BCEWithLogitsLoss()
     loss = 0
     pool = nn.AvgPool2d(3, 2, 1, count_include_pad=False)
-    for idx, model in enumerate(models):
+    for model in models:
         disc_real_out = None
         if is_discriminator:
             disc_real_out = model(real_image)
@@ -52,7 +52,7 @@ def adversarial_loss(models, real_image, fake_image, is_discriminator):
             fake_loss = loss_function(
                 disc_fake_out, torch.zeros_like(disc_fake_out)
             )
-            loss += (real_loss + fake_loss) / 2
+            loss += real_loss + fake_loss
         else:
             fake_loss = loss_function(
                 disc_fake_out, torch.ones_like(disc_fake_out)
@@ -61,7 +61,7 @@ def adversarial_loss(models, real_image, fake_image, is_discriminator):
         if is_discriminator:
             real_image = pool(real_image)
         fake_image = pool(fake_image)
-    return loss / len(models)
+    return loss
 
 
 def inpainting_loss(

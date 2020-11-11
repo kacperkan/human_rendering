@@ -39,33 +39,34 @@ class VideoDataset(Dataset):
 
 
 class DeepFashionDataset(Dataset):
-    def __init__(self, file_path: str, seed: int = 0xCAFFE) -> None:
-        self.file_paths = (
-            seq(Path(file_path).read_text().split("\n"))
-            .filter(lambda x: len(x) > 0)
-            .sorted()
-            .map(Path)
-            .filter(Path.exists)
-            .list()
-        )
-        self._validate_paths()
+    def __init__(
+        self, file_path: str, seed: int = 0xCAFFE, test_run: bool = False
+    ) -> None:
+        if not test_run:
+            self.file_paths = (
+                seq(Path(file_path).read_text().split("\n"))
+                .filter(lambda x: len(x) > 0)
+                .sorted()
+                .map(Path)
+                .filter(Path.exists)
+                .list()
+            )
+        else:
+            self.file_paths = [
+                (
+                    seq(Path(file_path).read_text().split("\n"))
+                    .filter(lambda x: len(x) > 0)
+                    .sorted()
+                    .map(Path)
+                    .filter(Path.exists)
+                    .filter(lambda x: "full" in x.name)
+                    .first()
+                )
+            ]
         self.seed = seed
         self._rng = np.random.RandomState(seed)
         self._rng_py = random.Random(seed)
-
-    def _validate_paths(self):
-        print("Num samples before filtering: {}".format(len(self.file_paths)))
-
-        def _f(path: Path) -> bool:
-            try:
-                with h5py.File(path, mode="r") as _:
-                    pass
-                return True
-            except OSError:
-                return False
-
-        self.file_paths = seq(self.file_paths).filter(_f).list()
-        print("Num samples after filtering: {}".format(len(self.file_paths)))
+        self.test_run = test_run
 
     def __len__(self) -> int:
         return len(self.file_paths)
@@ -73,15 +74,15 @@ class DeepFashionDataset(Dataset):
     def __getitem__(self, index: int) -> Any:
         sample_index = index
         with h5py.File(self.file_paths[index], mode="r") as h5_file:
-            frame = h5_file["frame"][:]
+            frame = h5_file["frame"][:][..., ::-1]
             texture = h5_file["texture"][:]
-            uv = (h5_file["uv"][:] * 255).astype(np.uint8)
+            uv = h5_file["uv"][:].astype(np.uint8)
             instances = h5_file["i"][:]
 
         with h5py.File(
             self._sample_with_similar_id(self.file_paths[index]), mode="r"
         ) as h5_file:
-            target_frame = h5_file["frame"][:]
+            target_frame = h5_file["frame"][:][..., ::-1]
             target_texture = h5_file["texture"][:]
 
         frame = (
@@ -162,6 +163,7 @@ class DeepFashionDataModule(datamodule.LightningDataModule):
         valid_path: str,
         batch_size: int,
         num_workers: int,
+        test_run: bool,
         iuv_transforms: Optional[Compose] = None,
         texture_transforms: Optional[Compose] = None,
     ) -> None:
@@ -174,6 +176,7 @@ class DeepFashionDataModule(datamodule.LightningDataModule):
 
         self.iuv_transforms = iuv_transforms
         self.texture_transforms = texture_transforms
+        self.test_run = test_run
 
     def prepare_data(self, *args, **kwargs) -> None:
         pass
@@ -182,7 +185,7 @@ class DeepFashionDataModule(datamodule.LightningDataModule):
         pass
 
     def train_dataloader(self, *args, **kwargs) -> DataLoader:
-        dataset = DeepFashionDataset(self.train_path)
+        dataset = DeepFashionDataset(self.train_path, test_run=self.test_run)
         loader = DataLoader(
             dataset,
             batch_size=self.batch_size,
@@ -194,7 +197,14 @@ class DeepFashionDataModule(datamodule.LightningDataModule):
         return loader
 
     def val_dataloader(self, *args, **kwargs) -> DataLoader:
-        dataset = DeepFashionDataset(self.valid_path)
+        if self.test_run:
+            dataset = DeepFashionDataset(
+                self.train_path, test_run=self.test_run
+            )
+        else:
+            dataset = DeepFashionDataset(
+                self.valid_path, test_run=self.test_run
+            )
         loader = DataLoader(
             dataset,
             batch_size=self.batch_size,

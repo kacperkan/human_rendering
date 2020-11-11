@@ -12,7 +12,6 @@ import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms as tv_transforms
-from pytorch_lightning.loggers import TestTubeLogger
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from common import CONFIG
@@ -29,10 +28,12 @@ def copy2cpu(tensor: torch.Tensor) -> np.ndarray:
 
 
 class HumanRendering(pl.LightningModule):
-    def __init__(self, logging_path: str, tex_res: int = 256):
+    def __init__(
+        self, logging_path: str, tex_res: int = 256, use_bn: bool = True
+    ):
         super().__init__()
-        self.feature_net = FeatureNet(3, 16)
-        self.render_net = RenderNet(16, 3)
+        self.feature_net = FeatureNet(3, 16, use_bn=use_bn)
+        self.render_net = RenderNet(16, 3, use_bn=use_bn)
         self.discriminators = nn.ModuleList(
             [
                 PatchDiscriminator(6),
@@ -40,6 +41,7 @@ class HumanRendering(pl.LightningModule):
                 PatchDiscriminator(6),
             ]
         )
+
         self.mapper = MapDensePoseTexModule(tex_res)
 
         self.vgg19 = Vgg19(requires_grad=False).eval()
@@ -68,17 +70,23 @@ class HumanRendering(pl.LightningModule):
         feature_out, textured_target, render_out = self(
             texture, train_batch["iuv"]
         )
-        if self.global_step % 100:
-            self.train_logger.add_image(
-                "render",
-                torchvision.utils.make_grid(render_out),
-                global_step=self.global_step,
-            )
-            self.train_logger.add_image(
-                "textured_target",
-                torchvision.utils.make_grid(textured_target[:, :3]),
-                global_step=self.global_step,
-            )
+        self.train_logger.add_image(
+            "render",
+            torchvision.utils.make_grid(render_out.add(1).div(2)),
+            global_step=self.global_step,
+        )
+        self.train_logger.add_image(
+            "textured_target",
+            torchvision.utils.make_grid(textured_target[:, :3].add(1).div(2)),
+            global_step=self.global_step,
+        )
+        self.train_logger.add_image(
+            "real",
+            torchvision.utils.make_grid(
+                train_batch["target_frame"].add(1).div(2)
+            ),
+            global_step=self.global_step,
+        )
 
         # train generator
         if optimizer_idx == 0:
@@ -220,12 +228,12 @@ class HumanRendering(pl.LightningModule):
                 )
             self.valid_logger.add_image(
                 "render",
-                torchvision.utils.make_grid(render_out),
+                torchvision.utils.make_grid(render_out.add(1).div(2)),
                 global_step=self.global_step,
             )
             self.valid_logger.add_image(
                 "textured_target",
-                torchvision.utils.make_grid(textured_target),
+                torchvision.utils.make_grid(textured_target.add(1).div(2)),
                 global_step=self.global_step,
             )
 
@@ -268,22 +276,31 @@ def train(train_path: str, valid_path: str, load_pretrained: bool):
     if model_path.exists() and not load_pretrained:
         shutil.rmtree(model_path.as_posix())
     model_path.mkdir(exist_ok=True, parents=True)
-    model = HumanRendering(model_path.as_posix())
+
+    train_config = CONFIG["training"]
+    model = HumanRendering(
+        model_path.as_posix(), use_bn=not train_config["test_run"]
+    )
     if load_pretrained:
         model.load_from_checkpoint(find_last_checkpoint(model_path))
-    train_config = CONFIG["training"]
+
+    batch_size = (
+        train_config["batch_size"] if not train_config["test_run"] else 1
+    )
+    num_workers = mp.cpu_count() - 1 if not train_config["test_run"] else 0
 
     data_module = DeepFashionDataModule(
         train_path,
         valid_path,
-        batch_size=train_config["batch_size"],
-        num_workers=mp.cpu_count() - 1,
+        batch_size=batch_size,
+        num_workers=num_workers,
         texture_transforms=tv_transforms.Compose([tv_transforms.ToTensor()]),
         iuv_transforms=None,
+        test_run=train_config["test_run"],
     )
 
     trainer = pl.Trainer(
-        logger=TestTubeLogger(save_dir=model_path.as_posix(), version=0),
+        logger=None,
         gpus=1,
         max_epochs=train_config["max_epochs"],
         default_root_dir=model_path,

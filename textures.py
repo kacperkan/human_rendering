@@ -146,5 +146,4 @@ class MapDensePoseTexModule(nn.Module):
             mode="bilinear",
             align_corners=True,
         )
-
         return output_data
